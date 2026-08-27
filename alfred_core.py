@@ -480,7 +480,7 @@ def wake_word_loop():
             listen_trigger.set()
 
 # =========================================================
-# 7. ORQUESTADOR PRINCIPAL
+# 7. ORQUESTADOR PRINCIPAL DEL SISTEMA 
 # =========================================================
 def main_loop():
     speak("Sistemas inicializados. En espera de activación.")
