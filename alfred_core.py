@@ -6,6 +6,7 @@ import random
 import socket
 import threading
 import time
+import urllib.parse
 import webbrowser
 from datetime import datetime
 import ctypes
@@ -17,23 +18,14 @@ import pygame
 import pyttsx3
 from google import genai
 from google.genai import types
-try:
-    import pywhatkit
-except Exception as e:
-    print(f"[AVISO] pywhatkit no disponible (sin internet al iniciar): {e}")
-    pywhatkit = None
+import pywhatkit
 import pyautogui
 import screen_brightness_control as sbc
-
-# --- NUEVO: Vosk cargado directamente, sin depender de dónde busque
-# SpeechRecognition internamente (esto varía entre versiones de la
-# librería y fue la causa del error "Vosk model not found"). ---
-from vosk import Model as VoskModel, KaldiRecognizer
 
 from dotenv import load_dotenv
 
 # =========================================================
-# 1. ESTADO GLOBAL Y COMPROBACIÓN DE REDxd
+# 1. ESTADO GLOBAL Y COMPROBACIÓN DE RED
 # =========================================================
 system_state = {
     "status": "INICIALIZANDO",
@@ -162,6 +154,46 @@ def query_llm(user_input: str) -> str:
             continue
     return "Error al conectar con la IA en la nube."
 
+
+def buscar_con_ia(consulta: str) -> str:
+    """Busca en internet usando la herramienta de Búsqueda de Google
+    integrada de Gemini (grounding) y devuelve un resumen hablado,
+    como el 'modo IA' de un buscador. No usa ni guarda el historial
+    de conversación -- es una consulta puntual, no un turno de charla."""
+    if not api_key_segura:
+        return "No puedo buscar en internet: falta la API Key de Gemini."
+
+    system_prompt_busqueda = (
+        "Eres ALFRED. Te acaban de pedir una búsqueda en internet. "
+        "Resume en español, en máximo 3 oraciones breves, la información "
+        "más relevante y actualizada que encuentres. Sé directo, sin "
+        "rodeos ni disculpas."
+    )
+
+    for model_name in MODEL_PRIORITY:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=consulta,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt_busqueda,
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.3,
+                ),
+            )
+            return response.text
+        except Exception as e:
+            mensaje_error = str(e)
+            print(f"[ERROR BÚSQUEDA IA - {model_name}]: {mensaje_error}")
+            if "RESOURCE_EXHAUSTED" in mensaje_error or "429" in mensaje_error:
+                # La cuota de búsqueda con IA (grounding) se comparte entre
+                # modelos -- si ya se agotó, seguir probando el siguiente
+                # modelo casi siempre falla igual, así que se corta aquí
+                # en vez de esperar el segundo error.
+                return "Se agotó mi cuota de búsquedas con IA por ahora. Intenta más tarde."
+            continue
+    return "No pude completar la búsqueda en este momento."
+
 # =========================================================
 # 3. DIRECTORIOS Y RUTAS LOCALES (OFFLINE)
 # =========================================================
@@ -187,19 +219,14 @@ WEB_URLS = {
     "facebook": "https://www.facebook.com",
     "instagram": "https://www.instagram.com",
     "whatsapp web": "https://web.whatsapp.com",
-    "gmail": "https://mail.google.com",
-    "spotify": "https://open.spotify.com",
-    "twitter": "https://twitter.com",
-    "tiktok": "https://www.tiktok.com",
-    "linkedin": "https://www.linkedin.com"
-
+    "gmail": "https://mail.google.com"
 }
 
 # =========================================================
 # 4. MANEJO DE COMANDOS LOCALES Y RED
 # =========================================================
 def handle_web_commands(command_text: str) -> bool:
-    if pywhatkit is None or not check_internet():
+    if not check_internet():
         return False
 
     text = command_text.lower().strip()
@@ -210,15 +237,15 @@ def handle_web_commands(command_text: str) -> bool:
             speak(f"Reproduciendo {busqueda} en YouTube.")
             pywhatkit.playonyt(busqueda)
             return True
-        if "en spotify" in text:
-            # CORREGIDO: antes esto llamaba a pywhatkit.playonyt() y en
-            # realidad abría YouTube en vez de Spotify. pywhatkit no tiene
-            # reproducción directa en Spotify, así que abrimos la búsqueda
-            # en la web de Spotify (requiere sesión iniciada en el navegador).
+        elif "en spotify" in text:
             busqueda = text.replace("reproduce ", "").replace("pon ", "").replace("en spotify", "").strip()
             speak(f"Buscando {busqueda} en Spotify.")
-            url_busqueda = "https://open.spotify.com/search/" + busqueda.replace(" ", "%20")
-            webbrowser.open(url_busqueda)
+            query = urllib.parse.quote(busqueda)
+            # Abre la búsqueda en Spotify Web. No hay forma de reproducir
+            # automáticamente sin autenticar al usuario (OAuth de la API
+            # oficial de Spotify) -- esto abre los resultados y el usuario
+            # solo tiene que darle play.
+            webbrowser.open(f"https://open.spotify.com/search/{query}")
             return True
 
     if "abre " in text or "abrir " in text:
@@ -227,6 +254,22 @@ def handle_web_commands(command_text: str) -> bool:
             speak(f"Abriendo {target}.")
             webbrowser.open(WEB_URLS[target])
             return True
+
+    # Búsqueda genérica en el navegador: "busca X" / "buscar X" / "búscame X"
+    # Cubre cualquier consulta libre -- cartelera de cine, hoteles, clima
+    # de un lugar, lo que sea -- sin necesidad de mapear cada caso a mano.
+    disparadores_busqueda = ["busca ", "buscar ", "búscame ", "investiga "]
+    for disparador in disparadores_busqueda:
+        if text.startswith(disparador) or f" {disparador}" in text:
+            consulta = text.split(disparador, 1)[1].strip() if disparador in text else ""
+            if consulta:
+                query = urllib.parse.quote(consulta)
+                webbrowser.open(f"https://www.google.com/search?q={query}")
+
+                system_state["status"] = "PROCESANDO"
+                resumen = buscar_con_ia(consulta)
+                speak(resumen)
+                return True
 
     return False
 
@@ -400,58 +443,6 @@ def speak(text: str):
     system_state["status"] = "INACTIVO"
 
 
-# =========================================================
-# 5.1 RECONOCIMIENTO OFFLINE CON VOSK (carga manual y directa)
-# =========================================================
-# NOTA IMPORTANTE: usamos el paquete `vosk` directamente en vez de
-# `recognizer.recognize_vosk(...)` de SpeechRecognition. La razón es que
-# distintas versiones de SpeechRecognition buscan el modelo en lugares
-# distintos (algunas dentro de site-packages/speech_recognition/models/vosk,
-# no en la carpeta del proyecto), lo que provocaba el error
-# "Vosk model not found" aunque el modelo sí existiera en model/.
-# Cargando el modelo nosotros mismos, la ruta siempre es la misma
-# (la carpeta model/ junto a este archivo) sin importar la versión
-# de la librería instalada.
-VOSK_MODEL_PATH = os.path.join(BASE_DIR, "model")
-_vosk_model = None
-_vosk_model_error = None
-
-
-def _get_vosk_model():
-    """Carga el modelo Vosk una sola vez (es pesado) y lo reutiliza."""
-    global _vosk_model, _vosk_model_error
-    if _vosk_model is not None:
-        return _vosk_model
-    if _vosk_model_error is not None:
-        # Ya sabemos que falta el modelo; no reintentamos en cada llamada.
-        raise _vosk_model_error
-    if not os.path.isdir(VOSK_MODEL_PATH):
-        _vosk_model_error = RuntimeError(
-            f"No se encontró la carpeta del modelo Vosk en: {VOSK_MODEL_PATH}. "
-            "Descárgalo desde https://alphacephei.com/vosk/models "
-            "(por ejemplo vosk-model-small-es-0.42), descomprímelo y "
-            "renombra la carpeta resultante a 'model'."
-        )
-        raise _vosk_model_error
-    try:
-        _vosk_model = VoskModel(VOSK_MODEL_PATH)
-        return _vosk_model
-    except Exception as e:
-        _vosk_model_error = e
-        raise
-
-
-def recognize_vosk_local(audio: "sr.AudioData") -> str:
-    """Transcribe un AudioData de SpeechRecognition usando Vosk directamente,
-    sin pasar por recognizer.recognize_vosk()."""
-    model = _get_vosk_model()
-    raw_data = audio.get_raw_data(convert_rate=16000, convert_width=2)
-    rec = KaldiRecognizer(model, 16000)
-    rec.AcceptWaveform(raw_data)
-    resultado = json.loads(rec.FinalResult())
-    return resultado.get("text", "").strip()
-
-
 def listen() -> str:
     recognizer = sr.Recognizer()
     recognizer.pause_threshold = 0.8
@@ -476,7 +467,9 @@ def listen() -> str:
             text = recognizer.recognize_google(audio, language="es-ES")
         else:
             try:
-                text = recognize_vosk_local(audio)
+                raw_res = recognizer.recognize_vosk(audio)
+                data = json.loads(raw_res) if raw_res else {}
+                text = data.get("text", "")
             except Exception as e:
                 print(f"[AVISO VOSK]: Reconocimiento offline falló. ¿Descargaste el modelo Vosk?\nError: {e}")
                 _marcar_error("No pude reconocer el audio sin conexión.")
@@ -494,6 +487,7 @@ def listen() -> str:
         return ""
 
     system_state["user_text"] = f"Tú: {text}"
+    print(f"Tú: {text}")  # para seguir viendo en la terminal lo que se reconoce
     return text
 
 # =========================================================
@@ -544,15 +538,10 @@ def wake_word_loop():
             listen_trigger.set()
 
 # =========================================================
-# 7. ORQUESTADOR PRINCIPAL DEL SISTEMA 
+# 7. ORQUESTADOR PRINCIPAL
 # =========================================================
 def main_loop():
-    # Aviso ético (requisito del proyecto, sección 11 del PDF): el usuario
-    # debe saber que interactúa con una IA y que puede cometer errores.
-    speak(
-        "Sistemas inicializados. Soy una inteligencia artificial y puedo "
-        "cometer errores. En espera de activación."
-    )
+    speak("Sistemas inicializados. En espera de activación.")
     EXIT_COMMANDS = ["salir", "adiós", "termina", "ciérrate"]
 
     while True:
