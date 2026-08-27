@@ -1,5 +1,5 @@
 # --- Interfaz gráfica y video ---
-pygame
+pygame-ce
 opencv-python
 
 # --- Voz (STT / TTS) ---
