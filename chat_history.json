@@ -1,0 +1,66 @@
+[
+    {
+        "role": "user",
+        "parts": [
+            {
+                "text": "Cuándo juega el Barsa"
+            }
+        ]
+    },
+    {
+        "role": "model",
+        "parts": [
+            {
+                "text": "El próximo encuentro del FC Barcelona está programado para este fin de semana según el calendario oficial de LaLiga."
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "parts": [
+            {
+                "text": "una bestia"
+            }
+        ]
+    },
+    {
+        "role": "model",
+        "parts": [
+            {
+                "text": "La potencia y la precisión impecables son, sin duda, mi sello distintivo."
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "parts": [
+            {
+                "text": "Pon Mon"
+            }
+        ]
+    },
+    {
+        "role": "model",
+        "parts": [
+            {
+                "text": "Iniciando la reproducción solicitada de inmediato con la máxima calidad."
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "parts": [
+            {
+                "text": "Pon mon laferte en"
+            }
+        ]
+    },
+    {
+        "role": "model",
+        "parts": [
+            {
+                "text": "Reproduciendo la música de Mon Laferte de inmediato en su dispositivo preferido."
+            }
+        ]
+    }
+]

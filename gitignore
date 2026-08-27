@@ -1,0 +1,23 @@
+# Credenciales -- NUNCA subir esto al repositorio
+.env
+
+# Memoria de conversación (datos locales del usuario, no código)
+chat_history.json
+
+# Modelo Vosk (offline STT) -- pesa ~58MB, se descarga aparte (ver README)
+model/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Salidas del módulo de exploración
+atencion_ultima_capa.png
+
+# Entornos / editores
+.vscode/
+.idea/

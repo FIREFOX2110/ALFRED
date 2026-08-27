@@ -1,0 +1,25 @@
+# --- Interfaz gráfica y video ---
+pygame
+opencv-python
+
+# --- Voz (STT / TTS) ---
+SpeechRecognition
+edge-tts
+pyttsx3
+vosk              # reconocimiento offline (requiere el modelo en model/, ver README)
+PyAudio           # necesario para sr.Microphone(); en Windows instalar vía pipwin si falla
+
+# --- LLM en la nube ---
+google-genai
+python-dotenv
+
+# --- Automatización del sistema (Windows) ---
+pyautogui
+pywhatkit
+screen-brightness-control
+psutil
+
+# --- Módulo de exploración del modelo (tokenización + atención) ---
+transformers
+torch
+matplotlib
