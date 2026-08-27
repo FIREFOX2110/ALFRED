@@ -24,7 +24,7 @@ import screen_brightness_control as sbc
 from dotenv import load_dotenv
 
 # =========================================================
-# 1. ESTADO GLOBAL Y COMPROBACIÓN DE RED
+# 1. ESTADO GLOBAL Y COMPROBACIÓN DE REDxd
 # =========================================================
 system_state = {
     "status": "INICIALIZANDO",
@@ -182,7 +182,7 @@ WEB_URLS = {
     "spotify": "https://open.spotify.com",
     "twitter": "https://twitter.com",
     "tiktok": "https://www.tiktok.com",
-    "linkedin": "https://www.linkedin.com",
+    "linkedin": "https://www.linkedin.com"
 
 }
 
