@@ -53,6 +53,8 @@ VIDEO_PATHS = {
     "ESCUCHANDO": os.path.join(BASE_DIR, "images/alfred_escuchando.mp4"),
     "PROCESANDO": os.path.join(BASE_DIR, "images/alfred_procesando.mp4"),
     "HABLANDO": os.path.join(BASE_DIR, "images/alfred_hablando.mp4"),
+    "ERROR": os.path.join(BASE_DIR, "images/alfred_error.mp4"),
+
 }
 FUENTE_TERMINAL = os.path.join(BASE_DIR, "VT323-Regular.ttf")
 FUENTE_TITULO = os.path.join(BASE_DIR, "Orbitron-VariableFont.ttf")
