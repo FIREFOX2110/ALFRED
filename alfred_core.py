@@ -18,18 +18,9 @@ import pygame
 import pyttsx3
 from google import genai
 from google.genai import types
-try:
-    import pywhatkit
-except Exception as e:
-    print(f"[AVISO] pywhatkit no disponible (sin internet al iniciar): {e}")
-    pywhatkit = None
+import pywhatkit
 import pyautogui
 import screen_brightness_control as sbc
-
-# Vosk cargado directamente, sin depender de dónde busque
-# SpeechRecognition internamente (esto varía entre versiones de la
-# librería y fue la causa del error "Vosk model not found").
-from vosk import Model as VoskModel, KaldiRecognizer
 
 from dotenv import load_dotenv
 
@@ -45,6 +36,15 @@ system_state = {
 listen_trigger = threading.Event()
 _vino_de_voz = threading.Event()  # marca si la activación fue por palabra clave, no por clic/espacio
 
+# modo_reposo controla quién tiene derecho al micrófono: mientras está
+# activo (set), el wake_word_loop escucha por "Alfred"; cuando ALFRED
+# despierta se limpia, y el bucle de atención activa tiene el micrófono
+# para sí sin que el wake_word_loop interfiera. Es independiente del
+# campo "status" (que es solo para mostrar en la GUI), así evitamos que
+# un simple ESCUCHANDO/HABLANDO/PROCESANDO reactive el wake word a medias.
+modo_reposo = threading.Event()
+modo_reposo.set()
+
 
 def check_internet(host="8.8.8.8", port=53, timeout=2) -> bool:
     try:
@@ -57,8 +57,9 @@ def check_internet(host="8.8.8.8", port=53, timeout=2) -> bool:
 
 def trigger_listening():
     """Activación manual: clic o barra espaciadora. No dispara saludo de voz."""
-    if system_state["status"] == "INACTIVO":
+    if modo_reposo.is_set():
         _vino_de_voz.clear()
+        modo_reposo.clear()
         listen_trigger.set()
 
 
@@ -235,7 +236,7 @@ WEB_URLS = {
 # 4. MANEJO DE COMANDOS LOCALES Y RED
 # =========================================================
 def handle_web_commands(command_text: str) -> bool:
-    if pywhatkit is None or not check_internet():
+    if not check_internet():
         return False
 
     text = command_text.lower().strip()
@@ -449,83 +450,23 @@ def speak(text: str):
     else:
         speak_offline(text)
 
-    system_state["status"] = "INACTIVO"
-
-
-# =========================================================
-# 5.1 RECONOCIMIENTO OFFLINE CON VOSK (carga manual y directa)
-# =========================================================
-# Usamos el paquete `vosk` directamente en vez de
-# `recognizer.recognize_vosk(...)` de SpeechRecognition. La razón es que
-# distintas versiones de SpeechRecognition buscan el modelo en lugares
-# distintos (algunas dentro de site-packages/speech_recognition/models/vosk,
-# no en la carpeta del proyecto), lo que provocaba el error
-# "Vosk model not found" aunque el modelo sí existiera en model/.
-# Cargando el modelo nosotros mismos, la ruta siempre es la misma
-# (la carpeta model/ junto a este archivo) sin importar la versión
-# de la librería instalada.
-VOSK_MODEL_PATH = os.path.join(BASE_DIR, "model")
-_vosk_model = None
-_vosk_model_error = None
-
-
-def _get_vosk_model():
-    """Carga el modelo Vosk una sola vez (es pesado) y lo reutiliza."""
-    global _vosk_model, _vosk_model_error
-    if _vosk_model is not None:
-        return _vosk_model
-    if _vosk_model_error is not None:
-        # Ya sabemos que falta el modelo; no reintentamos en cada llamada.
-        raise _vosk_model_error
-    if not os.path.isdir(VOSK_MODEL_PATH):
-        _vosk_model_error = RuntimeError(
-            f"No se encontró la carpeta del modelo Vosk en: {VOSK_MODEL_PATH}. "
-            "Descárgalo desde https://alphacephei.com/vosk/models "
-            "(por ejemplo vosk-model-small-es-0.42), descomprímelo y "
-            "renombra la carpeta resultante a 'model'."
-        )
-        raise _vosk_model_error
-    try:
-        _vosk_model = VoskModel(VOSK_MODEL_PATH)
-        return _vosk_model
-    except Exception as e:
-        _vosk_model_error = e
-        raise
-
-
-def recognize_vosk_local(audio: "sr.AudioData") -> str:
-    """Transcribe un AudioData de SpeechRecognition usando Vosk directamente,
-    sin pasar por recognizer.recognize_vosk()."""
-    model = _get_vosk_model()
-    raw_data = audio.get_raw_data(convert_rate=16000, convert_width=2)
-    rec = KaldiRecognizer(model, 16000)
-    rec.AcceptWaveform(raw_data)
-    resultado = json.loads(rec.FinalResult())
-    return resultado.get("text", "").strip()
-
 
 def listen() -> str:
     recognizer = sr.Recognizer()
     recognizer.pause_threshold = 0.8
 
-    audio = None
-    try:
-        with sr.Microphone() as source:
-            system_state["status"] = "ESCUCHANDO"
-            recognizer.adjust_for_ambient_noise(source, duration=0.3)
+    with sr.Microphone() as source:
+        system_state["status"] = "ESCUCHANDO"
+        recognizer.adjust_for_ambient_noise(source, duration=0.3)
+        try:
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
-    except sr.WaitTimeoutError:
-        _marcar_error("No escuché nada. Inténtalo de nuevo.")
-        return ""
-    except Exception as e:
-        # Cubre fallos de acceso al micrófono, incluyendo el caso de
-        # acceso concurrente entre este hilo y wake_word_loop (ambos
-        # intentan abrir sr.Microphone() al mismo tiempo). Sin este
-        # try/except amplio, ese conflicto tumbaba el hilo completo de
-        # main_loop y ALFRED dejaba de responder sin avisar.
-        _marcar_error("Problema con el micrófono.")
-        print(f"[ERROR MICRÓFONO]: {e}")
-        return ""
+        except sr.WaitTimeoutError:
+            _marcar_error("No escuché nada. Inténtalo de nuevo.")
+            return ""
+        except Exception as e:
+            _marcar_error("Problema con el micrófono.")
+            print(f"[ERROR MICRÓFONO]: {e}")
+            return ""
 
     system_state["status"] = "PROCESANDO"
     text = ""
@@ -534,7 +475,9 @@ def listen() -> str:
             text = recognizer.recognize_google(audio, language="es-ES")
         else:
             try:
-                text = recognize_vosk_local(audio)
+                raw_res = recognizer.recognize_vosk(audio)
+                data = json.loads(raw_res) if raw_res else {}
+                text = data.get("text", "")
             except Exception as e:
                 print(f"[AVISO VOSK]: Reconocimiento offline falló. ¿Descargaste el modelo Vosk?\nError: {e}")
                 _marcar_error("No pude reconocer el audio sin conexión.")
@@ -573,14 +516,32 @@ def _contiene_wake_word(texto: str) -> bool:
     return any(w in texto for w in WAKE_WORDS)
 
 
+FRASES_DESCANSO_TRIGGER = [
+    "descansa", "ve a descansar", "vete a descansar", "puedes descansar",
+    "ponte a descansar", "duérmete", "duerme", "vete a dormir", "a dormir",
+]
+FRASES_DESCANSO_RESPUESTA = [
+    "Entendido, quedo en reposo.",
+    "De acuerdo, me pongo a descansar.",
+    "Como diga, en reposo.",
+    "Muy bien, aquí estaré si me necesita.",
+]
+
+
+def _contiene_frase_descanso(texto: str) -> bool:
+    texto = texto.lower()
+    return any(f in texto for f in FRASES_DESCANSO_TRIGGER)
+
+
 def wake_word_loop():
-    """Escucha en segundo plano mientras ALFRED está inactivo, esperando
-    que se diga su nombre para activarse por voz (sin clic ni espacio)."""
+    """Escucha en segundo plano mientras ALFRED está en reposo, esperando
+    que se diga su nombre para activarse por voz (sin clic ni espacio).
+    Se pausa por completo mientras ALFRED está despierto/activo."""
     recognizer = sr.Recognizer()
     recognizer.pause_threshold = 0.6
 
     while True:
-        if system_state["status"] != "INACTIVO":
+        if not modo_reposo.is_set():
             threading.Event().wait(0.25)
             continue
         try:
@@ -590,7 +551,7 @@ def wake_word_loop():
         except Exception:
             continue
 
-        if system_state["status"] != "INACTIVO":
+        if not modo_reposo.is_set():
             continue  # se activó por clic/espacio mientras escuchábamos
 
         try:
@@ -599,74 +560,85 @@ def wake_word_loop():
             continue
 
         if texto and _contiene_wake_word(texto):
+            modo_reposo.clear()
             _vino_de_voz.set()
             listen_trigger.set()
 
 # =========================================================
 # 7. ORQUESTADOR PRINCIPAL
 # =========================================================
+EXIT_COMMANDS = ["salir", "adiós", "termina", "ciérrate"]
+
+
+def atender_activo():
+    """Mientras ALFRED está despierto, el micrófono escucha en bucle
+    continuo -- no vuelve a reposo entre un comando y el siguiente.
+    Solo regresa (a reposo) cuando se pide explícitamente que descanse,
+    o el programa termina por completo con un comando de salida."""
+    while True:
+        user_text = listen()
+
+        if not user_text:
+            # silencio, timeout o error de reconocimiento: seguimos
+            # despiertos y escuchando, sin pedir la palabra clave de nuevo
+            continue
+
+        text_lower = user_text.lower()
+
+        if any(cmd in text_lower for cmd in EXIT_COMMANDS):
+            speak("Desconectando sistemas.")
+            os._exit(0)
+
+        if _contiene_frase_descanso(text_lower):
+            speak(random.choice(FRASES_DESCANSO_RESPUESTA))
+            return  # vuelve a reposo -> el llamador reactiva el wake word
+
+        hw_response = ejecutar_comando_sistema(text_lower)
+        if hw_response:
+            speak(hw_response)
+            continue
+
+        if handle_local_commands(text_lower):
+            continue
+
+        if handle_web_commands(text_lower):
+            continue
+
+        # Ya NO se dice ninguna frase de relleno mientras se busca/procesa:
+        # se piensa en silencio y solo se habla la respuesta final.
+        if check_internet():
+            system_state["status"] = "PROCESANDO"
+            response_text = query_llm(user_text)
+            if response_text.startswith("Error"):
+                system_state["status"] = "ERROR"
+                time.sleep(0.8)
+            speak(response_text)
+        else:
+            system_state["status"] = "ERROR"
+            system_state["alfred_text"] = "ALFRED: Sin conexión a internet."
+            time.sleep(0.8)
+            speak("Modo sin conexión. Solo ejecuto comandos locales.")
+
+
 def main_loop():
-    # Aviso ético (requisito del proyecto, sección 11 del PDF): el usuario
-    # debe saber que interactúa con una IA y que puede cometer errores.
-    speak(
-        "Sistemas inicializados. Soy una inteligencia artificial y puedo "
-        "cometer errores. En espera de activación."
-    )
-    EXIT_COMMANDS = ["salir", "adiós", "termina", "ciérrate"]
+    speak("Sistemas inicializados. En espera de activación.")
 
     while True:
-        try:
-            system_state["status"] = "INACTIVO"
-            listen_trigger.wait()
-            listen_trigger.clear()
+        system_state["status"] = "INACTIVO"
+        listen_trigger.wait()
+        listen_trigger.clear()
 
-            if _vino_de_voz.is_set():
-                _vino_de_voz.clear()
-                speak(random.choice(FRASES_ACTIVACION))
+        if _vino_de_voz.is_set():
+            _vino_de_voz.clear()
+            speak(random.choice(FRASES_ACTIVACION))
 
-            user_text = listen()
+        atender_activo()
 
-            if user_text:
-                text_lower = user_text.lower()
-                if any(cmd in text_lower for cmd in EXIT_COMMANDS):
-                    speak("Desconectando sistemas.")
-                    os._exit(0)
-
-                hw_response = ejecutar_comando_sistema(text_lower)
-                if hw_response:
-                    speak(hw_response)
-                    continue
-
-                if handle_local_commands(text_lower):
-                    continue
-
-                if handle_web_commands(text_lower):
-                    continue
-
-                # Ya NO se dice ninguna frase de relleno mientras se busca/procesa:
-                # se piensa en silencio y solo se habla la respuesta final.
-                if check_internet():
-                    system_state["status"] = "PROCESANDO"
-                    response_text = query_llm(user_text)
-                    if response_text.startswith("Error"):
-                        system_state["status"] = "ERROR"
-                        time.sleep(0.8)
-                    speak(response_text)
-                else:
-                    system_state["status"] = "ERROR"
-                    system_state["alfred_text"] = "ALFRED: Sin conexión a internet."
-                    time.sleep(0.8)
-                    speak("Modo sin conexión. Solo ejecuto comandos locales.")
-        except Exception as e:
-            # Red de seguridad: cualquier error no previsto en esta vuelta
-            # del bucle (micrófono, red, lo que sea) queda registrado en
-            # consola, pero el hilo principal sigue vivo en la siguiente
-            # vuelta en vez de morir en silencio, como pasaba antes.
-            print(f"[ERROR INESPERADO EN main_loop]: {e}")
-            _marcar_error("Ocurrió un problema inesperado. Sigo en línea.")
+        # atender_activo() solo retorna cuando se pidió "descansa" ->
+        # ahora sí volvemos a reposo y el wake_word_loop se reactiva.
+        modo_reposo.set()
 
 
 def start_backend():
     threading.Thread(target=main_loop, daemon=True).start()
     threading.Thread(target=wake_word_loop, daemon=True).start()
-    
