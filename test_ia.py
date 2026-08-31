@@ -1,5 +1,5 @@
 """
-Prueba rápida de conexión con la API de Gemini (ver README, sección 8).
+Prueba rápida de conexión con la API de Gemini.
 Corre este script antes de lanzar la app completa para confirmar que tu
 GEMINI_API_KEY funciona y que los modelos configurados responden.
 """

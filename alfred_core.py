@@ -93,6 +93,78 @@ client = genai.Client(api_key=api_key_segura)
 
 MODEL_PRIORITY = ["gemini-3.6-flash", "gemini-3.5-flash"]
 
+# Tiempo máximo (en milisegundos) que esperamos a Gemini antes de darlo
+# por "muy lento" y pasar al respaldo local con Ollama. Con wifi saturado
+# (ej. el de un salón de clases) check_internet() puede seguir devolviendo
+# True aunque la respuesta tarde mucho -- este timeout es lo que nos
+# protege de quedarnos "colgados" esperando en ese caso.
+GEMINI_TIMEOUT_MS = 6000
+
+# =========================================================
+# 2.1 RESPALDO LOCAL: OLLAMA (LLM que corre en tu propia máquina,
+#     sin necesitar internet). Se usa solo cuando Gemini no responde
+#     a tiempo (sin conexión, o conexión muy lenta/congestionada).
+# =========================================================
+import requests
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "llama3.1:8b"    # ajustado para RTX 3050 (4GB VRAM) + 32GB RAM:
+                                 # no cabe completo en la GPU, pero con tanta RAM
+                                 # de sobra Ollama reparte el resto ahí sin problema
+OLLAMA_TIMEOUT_S = 25            # un poco más alto que con el modelo de 3B, porque
+                                 # parte del modelo corre en CPU/RAM, no solo GPU
+
+
+def ollama_disponible() -> bool:
+    """Revisa si el servidor de Ollama está corriendo en esta máquina
+    (¡ojo!: esto NO revisa internet, Ollama corre 100% local)."""
+    try:
+        requests.get("http://localhost:11434", timeout=1.5)
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
+def query_ollama(user_input: str) -> str:
+    """Genera una respuesta con un modelo local vía Ollama. Usa el mismo
+    'espíritu' de system prompt que Gemini, para que ALFRED no cambie de
+    personalidad solo porque cambió de motor por debajo."""
+    system_prompt = (
+        "Eres ALFRED, un asistente de IA conciso y directo. "
+        f"LA FECHA DE HOY ES: {get_current_date_str()}. "
+        "Responde SIEMPRE en español en una sola oración breve (máximo 20 palabras). "
+        "Estás funcionando en modo local sin internet, sé breve."
+    )
+
+    # Igual que con Gemini, solo mandamos los últimos turnos -- los
+    # modelos locales chicos suelen tener ventanas de contexto más
+    # limitadas que Gemini en la nube.
+    contexto_envio = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
+    mensajes = [{"role": "system", "content": system_prompt}]
+    for turno in contexto_envio:
+        rol = "assistant" if turno.get("role") == "model" else "user"
+        texto = turno["parts"][0]["text"]
+        mensajes.append({"role": rol, "content": texto})
+    mensajes.append({"role": "user", "content": user_input})
+
+    try:
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "messages": mensajes, "stream": False},
+            timeout=OLLAMA_TIMEOUT_S,
+        )
+        resp.raise_for_status()
+        reply = resp.json()["message"]["content"].strip()
+
+        conversation_history.append({"role": "user", "parts": [{"text": user_input}]})
+        conversation_history.append({"role": "model", "parts": [{"text": reply}]})
+        save_conversation_history(conversation_history)
+
+        return reply
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR OLLAMA]: {e}")
+        return None  # None = "tampoco pudo Ollama", se maneja arriba
+
 # Ruta absoluta -> evita que el historial se guarde en un directorio
 # distinto según desde dónde se ejecute el script.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,7 +230,12 @@ def query_llm(user_input: str) -> str:
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    temperature=0.3
+                    temperature=0.3,
+                    # Timeout corto a propósito: si la red está muy lenta
+                    # (ej. wifi saturado de un salón de clases), preferimos
+                    # fallar rápido aquí y pasar al respaldo local (Ollama)
+                    # en vez de dejar a ALFRED "colgado" esperando.
+                    http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
                 )
             )
             reply = response.text
@@ -171,7 +248,36 @@ def query_llm(user_input: str) -> str:
         except Exception as e:
             print(f"[ERROR LLM - {model_name}]: {e}")
             continue
-    return "Error al conectar con la IA en la nube."
+    return None  # None = "la nube no respondió a tiempo", se maneja en get_ai_response()
+
+
+# Interruptor de PRUEBA: ponlo en True para forzar que ALFRED use
+# SOLO Ollama (ignora Gemini por completo), sin necesidad de apagar
+# el wifi. Déjalo en False para el funcionamiento normal.
+FORZAR_SOLO_OLLAMA = False
+
+
+def get_ai_response(user_input: str) -> str:
+    """Punto único de entrada para conseguir una respuesta conversacional:
+    1) intenta Gemini en la nube (rápido y más capaz),
+    2) si no responde a tiempo (sin internet, o internet muy lento/
+       congestionado), cae a Ollama corriendo localmente,
+    3) si ninguno de los dos funciona, lo dice honestamente en vez
+       de fingir una respuesta o quedarse en silencio."""
+    if api_key_segura and not FORZAR_SOLO_OLLAMA:
+        reply = query_llm(user_input)
+        if reply:
+            return reply
+        print("[INFO] Gemini no respondió a tiempo, probando respaldo local (Ollama)...")
+    elif FORZAR_SOLO_OLLAMA:
+        print("[INFO] FORZAR_SOLO_OLLAMA está activo: se omite Gemini a propósito.")
+
+    if ollama_disponible():
+        reply = query_ollama(user_input)
+        if reply:
+            return reply
+
+    return "No pude conectar ni con la nube ni con el modelo local. Revisa tu conexión o que Ollama esté corriendo."
 
 
 def buscar_con_ia(consulta: str) -> str:
@@ -688,16 +794,19 @@ def atender_activo():
 
             # Ya NO se dice ninguna frase de relleno mientras se busca/procesa:
             # se piensa en silencio y solo se habla la respuesta final.
-            if check_internet():
+            # get_ai_response() decide por su cuenta si usa Gemini (nube) o
+            # cae a Ollama (local) -- atender_activo() ya no necesita saber
+            # ese detalle, solo pide "una respuesta" y confía en el resultado.
+            if check_internet() or ollama_disponible():
                 system_state["status"] = "PROCESANDO"
-                response_text = query_llm(user_text)
-                if response_text.startswith("Error"):
+                response_text = get_ai_response(user_text)
+                if response_text.startswith("No pude conectar"):
                     system_state["status"] = "ERROR"
                     time.sleep(0.8)
                 speak(response_text)
             else:
                 system_state["status"] = "ERROR"
-                system_state["alfred_text"] = "ALFRED: Sin conexión a internet."
+                system_state["alfred_text"] = "ALFRED: Sin conexión a internet ni modelo local disponible."
                 time.sleep(0.8)
                 speak("Modo sin conexión. Solo ejecuto comandos locales.")
         except Exception as e:

@@ -13,6 +13,11 @@ PyAudio           # necesario para sr.Microphone(); en Windows instalar vía pip
 google-genai
 python-dotenv
 
+# --- LLM local de respaldo (sin internet) ---
+# Requiere además instalar la app de Ollama por separado (ollama.com)
+# y descargar un modelo con: ollama pull llama3.2
+requests
+
 # --- Automatización del sistema (Windows) ---
 pyautogui
 pywhatkit
