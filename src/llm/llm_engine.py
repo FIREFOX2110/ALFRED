@@ -128,9 +128,8 @@ def query_llm(user_input: str) -> str:
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=0.3,
-                    # Timeout corto a propósito: si la red está muy lenta
-                    # (ej. wifi saturado de un salón de clases), preferimos
-                    # fallar rápido aquí y pasar al respaldo local (Ollama)
+                    # Timeout corto a propósito: si la red está muy lenta,
+                    # preferimos fallar rápido aquí y pasar al respaldo local (Ollama)
                     # en vez de dejar a ALFRED "colgado" esperando.
                     http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
                 )
