@@ -1,10 +1,6 @@
 """
 Demo en vivo: efecto de 'temperature' y 'top_p' sobre las respuestas de Gemini.
 
-No modifica alfred_core.py ni la app principal -- es un script aparte y seguro
-para correr durante la sustentación (pregunta guía #6 del PDF: "¿Qué pasa si
-cambias la temperatura o el top-p del modelo? Demuéstralo en vivo").
-
 Uso:
     python demo_temperatura.py
 """
@@ -13,7 +9,9 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-load_dotenv()
+# Apuntamos explícitamente al .env de la RAÍZ del proyecto
+_ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(_ENV_PATH)
 api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:

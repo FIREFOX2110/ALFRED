@@ -3,7 +3,10 @@ import sys
 import os
 import math
 import datetime
-import alfred_core
+# Alias: el resto del archivo sigue usando "alfred_core.algo" tal cual,
+# solo cambia de dónde viene el módulo (ahora vive en src/orchestrator.py,
+# organizado junto con el resto del backend en carpetas por responsabilidad).
+from src import orchestrator as alfred_core
 
 try:
     import cv2
@@ -49,15 +52,15 @@ STATUS_LABELS = {
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_PATHS = {
-    "INACTIVO": os.path.join(BASE_DIR, "images/alfred_inactivo.mp4"),
-    "ESCUCHANDO": os.path.join(BASE_DIR, "images/alfred_escuchando.mp4"),
-    "PROCESANDO": os.path.join(BASE_DIR, "images/alfred_procesando.mp4"),
-    "HABLANDO": os.path.join(BASE_DIR, "images/alfred_hablando.mp4"),
-    "ERROR": os.path.join(BASE_DIR, "images/alfred_error.mp4"),
+    "INACTIVO": os.path.join(BASE_DIR, "assets/images/alfred_inactivo.mp4"),
+    "ESCUCHANDO": os.path.join(BASE_DIR, "assets/images/alfred_escuchando.mp4"),
+    "PROCESANDO": os.path.join(BASE_DIR, "assets/images/alfred_procesando.mp4"),
+    "HABLANDO": os.path.join(BASE_DIR, "assets/images/alfred_hablando.mp4"),
+    "ERROR": os.path.join(BASE_DIR, "assets/images/alfred_error.mp4"),
 
 }
-FUENTE_TERMINAL = os.path.join(BASE_DIR, "VT323-Regular.ttf")
-FUENTE_TITULO = os.path.join(BASE_DIR, "Orbitron-VariableFont.ttf")
+FUENTE_TERMINAL = os.path.join(BASE_DIR, "assets/fonts/VT323-Regular.ttf")
+FUENTE_TITULO = os.path.join(BASE_DIR, "assets/fonts/Orbitron-VariableFont.ttf")
 
 MAX_HISTORIAL = 40
 
